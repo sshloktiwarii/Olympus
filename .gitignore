@@ -1,0 +1,17 @@
+# Build outputs & targets
+target/
+dist/
+build/
+out/
+.venv/
+node_modules/
+
+# Cache directories
+__pycache__/
+*.pyc
+.pytest_cache/
+*.tsbuildinfo
+.DS_Store
+
+# Logs
+*.log
