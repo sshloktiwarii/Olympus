@@ -296,11 +296,52 @@ async def websocket_endpoint(websocket: WebSocket):
         runner.active_websockets.discard(websocket)
 
 
+def find_free_port(start_port: int = 9000, max_port: int = 9100) -> int:
+    """Probes port availability starting at 9000, incrementing if in use."""
+    import socket
+
+    for p in range(start_port, max_port):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", p))
+                return p
+            except OSError:
+                continue
+    raise RuntimeError(f"Could not find an available port in range {start_port}-{max_port}")
+
+
+def update_ports_file(bound_port: int) -> None:
+    """Writes the bound core port to ephemeral .apex/ports.json in root workspace."""
+    cwd = Path.cwd().resolve()
+    # Locate root containing apex-stack or .apex
+    root = cwd.parent if cwd.name == "apex-core" else cwd
+    if root.name == "apex-stack":
+        root = root.parent
+
+    apex_dir = root / ".apex"
+    apex_dir.mkdir(parents=True, exist_ok=True)
+    ports_file = apex_dir / "ports.json"
+
+    ports_map = {}
+    if ports_file.exists():
+        try:
+            ports_map = json.loads(ports_file.read_text(encoding="utf-8"))
+        except Exception:
+            ports_map = {}
+
+    ports_map["core"] = bound_port
+    ports_file.write_text(json.dumps(ports_map, indent=2), encoding="utf-8")
+
+
 def start():
     import uvicorn
 
-    uvicorn.run("core.engine:app", host="127.0.0.1", port=9000, reload=False)
+    port = find_free_port(9000)
+    update_ports_file(port)
+    print(f"[Apex-Core] Successfully bound to http://127.0.0.1:{port}", flush=True)
+    uvicorn.run("core.engine:app", host="127.0.0.1", port=port, reload=False)
 
 
 if __name__ == "__main__":
     start()
+

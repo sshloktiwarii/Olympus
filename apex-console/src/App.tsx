@@ -58,11 +58,34 @@ export const App: React.FC = () => {
   const [selectedTask, setSelectedTask] = useState<DAGTask | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
-  // Connect to Apex-Core WebSocket
+  const [corePort, setCorePort] = useState<number>(9000);
+  const [gatewayPort, setGatewayPort] = useState<number>(8080);
+
+  // Discover ports from .apex/ports.json or fetch endpoint
   useEffect(() => {
+    const discoverPorts = async () => {
+      try {
+        const res = await fetch('/.apex/ports.json');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.core) setCorePort(data.core);
+          if (data.gateway) setGatewayPort(data.gateway);
+        }
+      } catch (_) {
+        // Default to standard fallback ports
+      }
+    };
+    discoverPorts();
+  }, []);
+
+  // Connect to Apex-Core WebSocket dynamically
+  useEffect(() => {
+    let socket: WebSocket | null = null;
+    let timer: NodeJS.Timeout | null = null;
+
     const connectWs = () => {
       try {
-        const socket = new WebSocket('ws://localhost:9000/ws');
+        socket = new WebSocket(`ws://localhost:${corePort}/ws`);
         wsRef.current = socket;
 
         socket.onopen = () => {
@@ -81,12 +104,12 @@ export const App: React.FC = () => {
 
         socket.onclose = () => {
           setIsConnected(false);
-          setTimeout(connectWs, 3000);
+          timer = setTimeout(connectWs, 3000);
         };
 
         socket.onerror = () => {
           setIsConnected(false);
-          socket.close();
+          socket?.close();
         };
       } catch (_) {
         setIsConnected(false);
@@ -96,11 +119,10 @@ export const App: React.FC = () => {
     connectWs();
 
     return () => {
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
+      if (timer) clearTimeout(timer);
+      if (socket) socket.close();
     };
-  }, []);
+  }, [corePort]);
 
   const handleDispatch = async () => {
     if (!prompt.trim()) return;
@@ -109,9 +131,9 @@ export const App: React.FC = () => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ action: 'dispatch', prompt }));
     } else {
-      // Direct REST fallback to localhost:9000
+      // Direct REST fallback to active dynamic core port
       try {
-        await fetch('http://localhost:9000/api/dispatch', { method: 'POST' });
+        await fetch(`http://localhost:${corePort}/api/dispatch`, { method: 'POST' });
       } catch (_) {
         // Local simulation fallback
         setTasks((prev) =>
@@ -184,7 +206,7 @@ export const App: React.FC = () => {
         <div className="flex items-center gap-4 text-[10px]">
           <div className="flex items-center gap-2 px-2.5 py-1 bg-black/60 border border-[#1f2438] rounded">
             <Radio className={`w-3 h-3 ${isConnected ? 'text-emerald-400 animate-pulse' : 'text-red-400'}`} />
-            <span>CORE WS: {isConnected ? 'CONNECTED (9000)' : 'STANDBY'}</span>
+            <span>CORE WS: {isConnected ? `CONNECTED (${corePort})` : 'STANDBY'}</span>
           </div>
 
           <div className="flex items-center gap-1.5 px-2.5 py-1 bg-black/60 border border-[#1f2438] rounded text-neutral-300">
@@ -348,8 +370,8 @@ export const App: React.FC = () => {
 
           <div className="p-3 border border-[#1f2438] bg-black/40 rounded text-[10px] text-neutral-500 space-y-1">
             <div>APEX STACK RUNTIME: v0.1.0</div>
-            <div>LOCAL PROXY: localhost:8080</div>
-            <div>ORCHESTRATOR: localhost:9000</div>
+            <div>LOCAL PROXY: localhost:{gatewayPort}</div>
+            <div>ORCHESTRATOR: localhost:{corePort}</div>
           </div>
         </aside>
       </main>

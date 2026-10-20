@@ -103,8 +103,23 @@ def log_event(message: str) -> None:
     print(f"[{now}] [Apex-Warden] {message}", flush=True)
 
 
-def run_warden(targets: List[str], check_interval_sec: float = 1.0) -> None:
-    log_event(f"Warden daemon initialized. Monitoring memory pressure for targets: {targets}")
+def calculate_adaptive_interval(pressure_pct: float) -> float:
+    """Computes adaptive polling interval based on memory pressure.
+
+    < 50% pressure  -> 1000ms (1.0s) relaxed loop
+    > 70% pressure  -> 100ms (0.1s) aggressive accelerated loop
+    50% - 70%       -> 500ms (0.5s) transitional cadence
+    """
+    if pressure_pct > 70.0:
+        return 0.1
+    elif pressure_pct < 50.0:
+        return 1.0
+    return 0.5
+
+
+def run_warden(targets: List[str], base_interval_sec: float = 1.0) -> None:
+    baseline_pressure = get_memory_pressure_pct()
+    log_event(f"Warden daemon initialized (baseline pressure: {baseline_pressure:.1f}%). Monitoring targets: {targets}")
     is_throttled = False
     frozen_pids: Set[int] = set()
 
@@ -137,7 +152,8 @@ def run_warden(targets: List[str], check_interval_sec: float = 1.0) -> None:
                         pass
                 frozen_pids.clear()
 
-            time.sleep(check_interval_sec)
+            sleep_interval = calculate_adaptive_interval(pressure)
+            time.sleep(sleep_interval)
     except KeyboardInterrupt:
         log_event("Shutting down Warden. Resuming all frozen processes...")
         for pid in frozen_pids:

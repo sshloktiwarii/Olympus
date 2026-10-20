@@ -3,6 +3,7 @@ use std::process::{Command, Output};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
+#[allow(dead_code)]
 pub enum EnclaveError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
