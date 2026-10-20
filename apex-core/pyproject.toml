@@ -1,0 +1,19 @@
+[project]
+name = "apex-core"
+version = "0.1.0"
+description = "Asynchronous Python orchestration engine with APFS/reflink CoW snapshots and O(1) rollbacks"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "uvloop>=0.19.0; sys_platform != 'win32'",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.28.0",
+    "websockets>=12.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["core"]
