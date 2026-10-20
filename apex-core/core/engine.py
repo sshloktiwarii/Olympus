@@ -22,8 +22,12 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
+try:
+    from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+    from fastapi.middleware.cors import CORSMiddleware
+    HAS_FASTAPI = True
+except ImportError:
+    HAS_FASTAPI = False
 
 
 class NodeStatus(str, Enum):
@@ -207,93 +211,91 @@ class ApexDAGRunner:
 
 # ── FastAPI WebSocket & REST Interface ─────────────────────────────────────────
 
-app = FastAPI(title="Apex-Core Orchestration Engine")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-WORKSPACE_ROOT = Path("/tmp/apex_engine_workspace")
-workspace_cow = MemoryCOWWorkspace(WORKSPACE_ROOT)
-runner = ApexDAGRunner(workspace_cow)
-
-
-def populate_default_demo_dag():
-    runner.tasks.clear()
-    runner.register_task(
-        DAGTask(
-            id="step-1",
-            name="Initialize Sandboxed Inode",
-            command="echo 'System Initialized' > build.log",
-        )
-    )
-    runner.register_task(
-        DAGTask(
-            id="step-2",
-            name="BPE Radix AST Tokenization",
-            command="echo 'Tokenizing AST...' >> build.log",
-            dependencies=["step-1"],
-        )
-    )
-    runner.register_task(
-        DAGTask(
-            id="step-3",
-            name="CoW Compiler Execution",
-            command="echo 'Compiling...' >> build.log && sleep 1",
-            dependencies=["step-2"],
-        )
-    )
-    runner.register_task(
-        DAGTask(
-            id="step-4",
-            name="Verify Inode Integrity",
-            command="cat build.log",
-            dependencies=["step-3"],
-        )
+if HAS_FASTAPI:
+    app = FastAPI(title="Apex-Core Orchestration Engine")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
+    WORKSPACE_ROOT = Path("/tmp/apex_engine_workspace")
+    workspace_cow = MemoryCOWWorkspace(WORKSPACE_ROOT)
+    runner = ApexDAGRunner(workspace_cow)
 
-populate_default_demo_dag()
+    def populate_default_demo_dag():
+        runner.tasks.clear()
+        runner.register_task(
+            DAGTask(
+                id="step-1",
+                name="Initialize Sandboxed Inode",
+                command="echo 'System Initialized' > build.log",
+            )
+        )
+        runner.register_task(
+            DAGTask(
+                id="step-2",
+                name="BPE Radix AST Tokenization",
+                command="echo 'Tokenizing AST...' >> build.log",
+                dependencies=["step-1"],
+            )
+        )
+        runner.register_task(
+            DAGTask(
+                id="step-3",
+                name="CoW Compiler Execution",
+                command="echo 'Compiling...' >> build.log && sleep 1",
+                dependencies=["step-2"],
+            )
+        )
+        runner.register_task(
+            DAGTask(
+                id="step-4",
+                name="Verify Inode Integrity",
+                command="cat build.log",
+                dependencies=["step-3"],
+            )
+        )
 
-
-@app.get("/api/state")
-async def get_state():
-    return {"tasks": [asdict(t) for t in runner.tasks.values()]}
-
-
-@app.post("/api/dispatch")
-async def dispatch_workflow():
     populate_default_demo_dag()
-    asyncio.create_task(runner.run_dag())
-    return {"status": "Dispatched", "tasks_count": len(runner.tasks)}
 
+    @app.get("/api/state")
+    async def get_state():
+        return {"tasks": [asdict(t) for t in runner.tasks.values()]}
 
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    runner.active_websockets.add(websocket)
-    # Send initial state
-    await websocket.send_text(
-        json.dumps(
-            {
-                "type": "DAG_STATE_INIT",
-                "timestamp": time.time(),
-                "tasks": [asdict(t) for t in runner.tasks.values()],
-            }
+    @app.post("/api/dispatch")
+    async def dispatch_workflow():
+        populate_default_demo_dag()
+        asyncio.create_task(runner.run_dag())
+        return {"status": "Dispatched", "tasks_count": len(runner.tasks)}
+
+    @app.websocket("/ws")
+    async def websocket_endpoint(websocket: WebSocket):
+        await websocket.accept()
+        runner.active_websockets.add(websocket)
+        # Send initial state
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "type": "DAG_STATE_INIT",
+                    "timestamp": time.time(),
+                    "tasks": [asdict(t) for t in runner.tasks.values()],
+                }
+            )
         )
-    )
-    try:
-        while True:
-            data = await websocket.receive_text()
-            msg = json.loads(data)
-            if msg.get("action") == "dispatch":
-                populate_default_demo_dag()
-                asyncio.create_task(runner.run_dag())
-    except WebSocketDisconnect:
-        runner.active_websockets.discard(websocket)
+        try:
+            while True:
+                data = await websocket.receive_text()
+                msg = json.loads(data)
+                if msg.get("action") == "dispatch":
+                    populate_default_demo_dag()
+                    asyncio.create_task(runner.run_dag())
+        except WebSocketDisconnect:
+            runner.active_websockets.discard(websocket)
+else:
+    app = None
 
 
 def find_free_port(start_port: int = 9000, max_port: int = 9100) -> int:
@@ -337,6 +339,9 @@ def update_ports_file(bound_port: int) -> None:
 
 
 def start():
+    if not HAS_FASTAPI:
+        print("[Apex-Core] Error: fastapi and uvicorn are required to start server. Run: pip install fastapi uvicorn websockets", flush=True)
+        sys.exit(1)
     import uvicorn
 
     port = find_free_port(9000)

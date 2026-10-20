@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  apex:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: apex-runtime
+    ports:
+      - "8080:8080"
+      - "9000:9000"
+      - "5173:5173"
+    environment:
+      - HOST=0.0.0.0
+      - UPSTREAM_LLM=http://host.docker.internal:11434
+    volumes:
+      - ./workspace:/apex/workspace
+    cap_add:
+      - SYS_ADMIN # Required for Bubblewrap unprivileged Linux namespaces
+    security_opt:
+      - apparmor:unconfined
+    restart: unless-stopped

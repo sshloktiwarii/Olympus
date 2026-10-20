@@ -187,11 +187,11 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="w-screen h-screen bg-[#07090e] text-neutral-100 flex flex-col font-mono selection:bg-amber-500/30">
+    <div className="w-screen min-h-screen lg:h-screen bg-[#07090e] text-neutral-100 flex flex-col font-mono selection:bg-amber-500/30 overflow-x-hidden">
       {/* HEADER STATUS BAR */}
-      <header className="h-12 border-b border-[#1f2438] bg-[#090b13] px-5 flex items-center justify-between text-xs shrink-0 z-50">
+      <header className="min-h-12 border-b border-[#1f2438] bg-[#090b13] px-4 py-2 flex flex-wrap items-center justify-between gap-3 text-xs shrink-0 z-50">
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5" aria-hidden="true">
             <span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block" />
             <span className="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block" />
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block" />
@@ -199,38 +199,38 @@ export const App: React.FC = () => {
           <span className="font-bold tracking-widest text-white text-[11px] uppercase">
             APEX // STEERING CONSOLE
           </span>
-          <span className="text-neutral-600">/</span>
-          <span className="text-neutral-400 text-[10px]">L7 INFERENCE & KERNEL SUPERVISOR</span>
+          <span className="text-neutral-600 hidden sm:inline">/</span>
+          <span className="text-neutral-400 text-[10px] hidden sm:inline">L7 INFERENCE & KERNEL SUPERVISOR</span>
         </div>
 
-        <div className="flex items-center gap-4 text-[10px]">
+        <div className="flex flex-wrap items-center gap-3 text-[10px]">
           <div className="flex items-center gap-2 px-2.5 py-1 bg-black/60 border border-[#1f2438] rounded">
-            <Radio className={`w-3 h-3 ${isConnected ? 'text-emerald-400 animate-pulse' : 'text-red-400'}`} />
+            <Radio className={`w-3 h-3 ${isConnected ? 'text-emerald-400 animate-pulse' : 'text-red-400'}`} aria-hidden="true" />
             <span>CORE WS: {isConnected ? `CONNECTED (${corePort})` : 'STANDBY'}</span>
           </div>
 
           <div className="flex items-center gap-1.5 px-2.5 py-1 bg-black/60 border border-[#1f2438] rounded text-neutral-300">
-            <Shield className="w-3 h-3 text-cyan-400" />
+            <Shield className="w-3 h-3 text-cyan-400" aria-hidden="true" />
             <span>ENCLAVE: ACTIVE</span>
           </div>
 
           <div className="flex items-center gap-1.5 px-2.5 py-1 bg-black/60 border border-[#1f2438] rounded text-neutral-300">
-            <Cpu className="w-3 h-3 text-purple-400" />
+            <Cpu className="w-3 h-3 text-purple-400" aria-hidden="true" />
             <span>WARDEN: IDLE (32% RAM)</span>
           </div>
         </div>
       </header>
 
       {/* MAIN VIEWPORT CANVAS */}
-      <main className="flex-1 flex overflow-hidden">
+      <main className="flex-1 flex flex-col lg:flex-row overflow-x-hidden overflow-y-auto lg:overflow-hidden">
         {/* LEFT: DAG WORKFLOW CANVAS */}
-        <section className="flex-1 p-6 flex flex-col gap-5 overflow-y-auto border-r border-[#1f2438]">
-          <div className="flex items-center justify-between">
+        <section className="flex-1 p-4 lg:p-6 flex flex-col gap-5 overflow-y-auto lg:border-r border-[#1f2438]">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <div className="text-[10px] text-amber-400 uppercase tracking-widest font-bold">
                 [ DIRECTED ACYCLIC GRAPH ]
               </div>
-              <h2 className="text-lg font-bold text-white mt-0.5 tracking-tight">
+              <h2 className="text-base sm:text-lg font-bold text-white mt-0.5 tracking-tight">
                 Execution Pipeline & MemoryCOW Branches
               </h2>
             </div>
@@ -308,7 +308,7 @@ export const App: React.FC = () => {
         </section>
 
         {/* RIGHT: DISPATCH DOCK & NODE INSPECTION */}
-        <aside className="w-96 p-6 flex flex-col justify-between bg-[#090b13] shrink-0">
+        <aside className="w-full lg:w-96 p-4 lg:p-6 flex flex-col justify-between bg-[#090b13] shrink-0 border-t lg:border-t-0 border-[#1f2438]">
           <div className="space-y-4">
             <div>
               <div className="text-[10px] text-cyan-400 uppercase tracking-widest font-bold">
@@ -318,12 +318,13 @@ export const App: React.FC = () => {
             </div>
 
             <div className="space-y-2">
-              <label className="text-[10px] text-neutral-400 uppercase">Workflow Prompt</label>
+              <label htmlFor="prompt-input" className="text-[10px] text-neutral-400 uppercase">Workflow Prompt</label>
               <textarea
+                id="prompt-input"
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 rows={4}
-                className="w-full bg-[#07090e] border border-[#1f2438] rounded p-3 text-xs text-white focus:outline-none focus:border-amber-400 resize-none font-mono"
+                className="w-full bg-[#07090e] border border-[#1f2438] rounded p-3 text-xs text-white focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent resize-none font-mono"
                 placeholder="Enter autonomous agent instructions..."
               />
             </div>
@@ -331,18 +332,31 @@ export const App: React.FC = () => {
             <button
               onClick={handleDispatch}
               disabled={isDispatching}
-              className="w-full py-2.5 bg-amber-400 hover:bg-amber-300 text-black font-bold text-xs uppercase rounded transition-colors flex items-center justify-center gap-2 disabled:opacity-50 shadow-md shadow-amber-400/10"
+              className="w-full py-2.5 bg-amber-400 hover:bg-amber-300 text-black font-bold text-xs uppercase rounded transition-colors flex items-center justify-center gap-2 disabled:opacity-50 shadow-md shadow-amber-400/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
             >
-              <Send className="w-3.5 h-3.5" />
+              <Send className="w-3.5 h-3.5" aria-hidden="true" />
               <span>{isDispatching ? 'EXECUTING PIPELINE...' : 'DISPATCH WORKFLOW'}</span>
             </button>
 
             {/* NODE INSPECTOR DRAWER */}
             {selectedTask && (
-              <div className="mt-6 p-4 bg-[#07090e] border border-[#1f2438] rounded-lg space-y-2">
+              <div
+                role="region"
+                aria-label="Task Details Inspector"
+                className="mt-6 p-4 bg-[#07090e] border border-[#1f2438] rounded-lg space-y-2"
+              >
                 <div className="flex items-center justify-between text-xs border-b border-[#1f2438] pb-2">
                   <span className="font-bold text-white truncate">{selectedTask.name}</span>
-                  <span className="text-[10px] text-amber-400">{selectedTask.status}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-amber-400">{selectedTask.status}</span>
+                    <button
+                      onClick={() => setSelectedTask(null)}
+                      className="text-neutral-500 hover:text-white text-xs px-1 focus-visible:ring-1 focus-visible:ring-amber-400"
+                      aria-label="Close task inspector"
+                    >
+                      ✕
+                    </button>
+                  </div>
                 </div>
                 <div className="text-[10px] space-y-1 text-neutral-400">
                   <div>ID: <code className="text-white">{selectedTask.id}</code></div>
