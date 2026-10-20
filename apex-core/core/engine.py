@@ -314,23 +314,26 @@ def update_ports_file(bound_port: int) -> None:
     """Writes the bound core port to ephemeral .apex/ports.json in root workspace."""
     cwd = Path.cwd().resolve()
     # Locate root containing apex-stack or .apex
-    root = cwd.parent if cwd.name == "apex-core" else cwd
+    root = cwd.parent if cwd.name in ("apex-core", "apex-gateway", "apex-console") else cwd
     if root.name == "apex-stack":
         root = root.parent
 
-    apex_dir = root / ".apex"
-    apex_dir.mkdir(parents=True, exist_ok=True)
-    ports_file = apex_dir / "ports.json"
-
-    ports_map = {}
-    if ports_file.exists():
+    apex_dirs = [root / ".apex", root / "apex-stack" / ".apex"]
+    for apex_dir in apex_dirs:
         try:
-            ports_map = json.loads(ports_file.read_text(encoding="utf-8"))
-        except Exception:
+            apex_dir.mkdir(parents=True, exist_ok=True)
+            ports_file = apex_dir / "ports.json"
             ports_map = {}
+            if ports_file.exists():
+                try:
+                    ports_map = json.loads(ports_file.read_text(encoding="utf-8"))
+                except Exception:
+                    ports_map = {}
 
-    ports_map["core"] = bound_port
-    ports_file.write_text(json.dumps(ports_map, indent=2), encoding="utf-8")
+            ports_map["core"] = bound_port
+            ports_file.write_text(json.dumps(ports_map, indent=2), encoding="utf-8")
+        except Exception:
+            pass
 
 
 def start():

@@ -149,24 +149,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // Update ephemeral .apex/ports.json in root workspace
+    // Update ephemeral .apex/ports.json in root workspace and apex-stack
     if let Ok(current_dir) = std::env::current_dir() {
         let root_dir = if current_dir.ends_with("apex-gateway") {
             current_dir.parent().and_then(|p| p.parent()).unwrap_or(&current_dir)
+        } else if current_dir.ends_with("apex-stack") {
+            current_dir.parent().unwrap_or(&current_dir)
         } else {
             &current_dir
         };
-        let apex_dir = root_dir.join(".apex");
-        let _ = std::fs::create_dir_all(&apex_dir);
-        let ports_file = apex_dir.join("ports.json");
 
-        let mut ports_map: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(&ports_file)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
+        let apex_dirs = vec![
+            root_dir.join(".apex"),
+            root_dir.join("apex-stack").join(".apex"),
+        ];
 
-        ports_map.insert("gateway".to_string(), serde_json::json!(port));
-        let _ = std::fs::write(&ports_file, serde_json::to_string_pretty(&ports_map).unwrap_or_default());
+        for apex_dir in apex_dirs {
+            let _ = std::fs::create_dir_all(&apex_dir);
+            let ports_file = apex_dir.join("ports.json");
+
+            let mut ports_map: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(&ports_file)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default();
+
+            ports_map.insert("gateway".to_string(), serde_json::json!(port));
+            let _ = std::fs::write(&ports_file, serde_json::to_string_pretty(&ports_map).unwrap_or_default());
+        }
     }
 
     axum::serve(listener, app).await?;
