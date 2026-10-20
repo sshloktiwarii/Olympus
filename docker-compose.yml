@@ -15,8 +15,11 @@ services:
       - UPSTREAM_LLM=http://host.docker.internal:11434
     volumes:
       - ./workspace:/apex/workspace
+    # SECURITY INVARIANT (P0): Do NOT use 'privileged: true' (prevents host kernel escalation)
+    privileged: false
     cap_add:
-      - SYS_ADMIN # Required for Bubblewrap unprivileged Linux namespaces
+      - SYS_ADMIN     # Required for Bubblewrap unprivileged Linux namespaces
+      - DAC_OVERRIDE  # Required for isolated file permission management
     security_opt:
       - apparmor:unconfined
     restart: unless-stopped

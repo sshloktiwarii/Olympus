@@ -117,6 +117,45 @@ def calculate_adaptive_interval(pressure_pct: float) -> float:
     return 0.5
 
 
+def evaluate_memory_pressure_step(
+    targets: List[str],
+    is_throttled: bool,
+    frozen_pids: Set[int],
+    pressure: Optional[float] = None,
+) -> tuple[bool, Set[int], float]:
+    """Single-iteration evaluation step. Supports synthetic telemetry injection for deterministic testing."""
+    if pressure is None:
+        pressure = get_memory_pressure_pct()
+
+    if pressure >= 85.0 and not is_throttled:
+        is_throttled = True
+        active_pids = find_target_pids(targets)
+        frozen_pids = set(active_pids)
+        log_event(f"CRITICAL: Memory pressure at {pressure:.2f}% >= 85%. Freezing {len(active_pids)} processes with SIGSTOP...")
+        for pid in active_pids:
+            try:
+                os.kill(pid, signal.SIGSTOP)
+                log_event(f"  -> SIGSTOP sent to PID {pid}")
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                log_event(f"  -> Permission denied for PID {pid}")
+
+    elif pressure < 70.0 and is_throttled:
+        is_throttled = False
+        log_event(f"RECOVERY: Memory pressure dropped to {pressure:.2f}% < 70%. Resuming {len(frozen_pids)} processes with SIGCONT...")
+        for pid in frozen_pids:
+            try:
+                os.kill(pid, signal.SIGCONT)
+                log_event(f"  -> SIGCONT sent to PID {pid}")
+            except ProcessLookupError:
+                pass
+        frozen_pids.clear()
+
+    sleep_interval = calculate_adaptive_interval(pressure)
+    return is_throttled, frozen_pids, sleep_interval
+
+
 def run_warden(targets: List[str], base_interval_sec: float = 1.0) -> None:
     baseline_pressure = get_memory_pressure_pct()
     log_event(f"Warden daemon initialized (baseline pressure: {baseline_pressure:.1f}%). Monitoring targets: {targets}")
@@ -125,34 +164,9 @@ def run_warden(targets: List[str], base_interval_sec: float = 1.0) -> None:
 
     try:
         while True:
-            pressure = get_memory_pressure_pct()
-
-            if pressure >= 85.0 and not is_throttled:
-                is_throttled = True
-                active_pids = find_target_pids(targets)
-                frozen_pids = active_pids
-                log_event(f"CRITICAL: Memory pressure at {pressure:.2f}% >= 85%. Freezing {len(active_pids)} processes with SIGSTOP...")
-                for pid in active_pids:
-                    try:
-                        os.kill(pid, signal.SIGSTOP)
-                        log_event(f"  -> SIGSTOP sent to PID {pid}")
-                    except ProcessLookupError:
-                        pass
-                    except PermissionError:
-                        log_event(f"  -> Permission denied for PID {pid}")
-
-            elif pressure < 70.0 and is_throttled:
-                is_throttled = False
-                log_event(f"RECOVERY: Memory pressure dropped to {pressure:.2f}% < 70%. Resuming {len(frozen_pids)} processes with SIGCONT...")
-                for pid in frozen_pids:
-                    try:
-                        os.kill(pid, signal.SIGCONT)
-                        log_event(f"  -> SIGCONT sent to PID {pid}")
-                    except ProcessLookupError:
-                        pass
-                frozen_pids.clear()
-
-            sleep_interval = calculate_adaptive_interval(pressure)
+            is_throttled, frozen_pids, sleep_interval = evaluate_memory_pressure_step(
+                targets, is_throttled, frozen_pids
+            )
             time.sleep(sleep_interval)
     except KeyboardInterrupt:
         log_event("Shutting down Warden. Resuming all frozen processes...")

@@ -72,6 +72,16 @@ graph TD
 - **Decision:** `Apex-Gateway` probes ports `8080..=8180`, and `Apex-Core` probes `9000..=9100`. Bound ports are atomically recorded to `.apex/ports.json`.
 - **UI Integration:** `Apex-Console` boots with dynamic port resolution via Vite middleware and relative fetch, preventing all `EADDRINUSE` port lockups.
 
+### ADR-006: Process Group (PGRP) Session Isolation & Teardown
+- **Decision:** All daemons spawned by `bin/apex` must execute in an independent Process Group via `preexec_fn=os.setsid` or equivalent session creation.
+- **Teardown Invariant:** Upon receiving `SIGINT` or `SIGTERM`, the master supervisor propagates `signal.SIGTERM` across the entire process group using `os.killpg(pgrp, signal.SIGTERM)` followed by `SIGKILL` after a 500ms grace period.
+- **Rationale:** Prevents orphaned zombie processes from holding network ports `8080` and `9000` hostage when the master CLI exits or crashes.
+
+### ADR-007: Container Least-Privilege & Capabilities Isolation
+- **Decision:** `docker-compose.yml` must explicitly forbid `privileged: true`.
+- **Rationale:** Running containers with `privileged: true` grants the container root access to host kernel devices. If untrusted AI agent code breaks out of the sandbox, it could compromise the physical host.
+- **Enforcement:** Supply only the fine-grained Linux capabilities required by Bubblewrap (`cap_add: [SYS_ADMIN, DAC_OVERRIDE]`) and treat Docker as an evaluation sandbox, relying on native host `bin/apex` execution for hardware-isolated workflows.
+
 ---
 
 ## 4. Adversarial Attack & Recovery Sequence Diagram

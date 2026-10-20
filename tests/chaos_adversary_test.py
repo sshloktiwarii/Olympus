@@ -58,25 +58,42 @@ def test_shield_1_warden_memory():
     assert 0.0 <= pressure <= 100.0, f"Invalid memory pressure reading: {pressure}"
     print(f"    {GREEN}✓ Mach/sysctl ctypes kernel telemetry operational.{RESET}")
 
-    # 3. Simulate process freeze / unfreeze via SIGSTOP / SIGCONT
-    print("  • Testing real process suspension (SIGSTOP) and recovery (SIGCONT)...")
-    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(10)"])
-    try:
-        # Freeze
-        os.kill(proc.pid, signal.SIGSTOP)
-        time.sleep(0.05)
-        # Check that process is stopped or alive
-        assert proc.poll() is None, "Process died prematurely"
-        print(f"    {GREEN}✓ SIGSTOP successfully suspended PID {proc.pid}{RESET}")
+    # 3. Deterministic Synthetic Telemetry Injection (Eliminates OOM Race Conditions)
+    print("  • Testing synthetic memory spike injection (92.0% pressure)...")
+    proc = subprocess.Popen([sys.executable, "-c", "# apex_chaos_worker\nimport time\ntime.sleep(15)"])
+    time.sleep(0.1)
 
-        # Resume
-        os.kill(proc.pid, signal.SIGCONT)
-        time.sleep(0.05)
-        assert proc.poll() is None, "Process died on SIGCONT"
-        print(f"    {GREEN}✓ SIGCONT successfully resumed PID {proc.pid}{RESET}")
+    try:
+        # Inject synthetic 92% critical memory spike
+        throttled, frozen, interval = apex_warden.evaluate_memory_pressure_step(
+            targets=["apex_chaos_worker"],
+            is_throttled=False,
+            frozen_pids=set(),
+            pressure=92.0,
+        )
+        assert throttled is True, "Warden failed to enter throttled state on 92% pressure"
+        assert interval == 0.1, f"Expected 100ms accelerated polling interval, got: {interval}s"
+        assert proc.pid in frozen, f"Target PID {proc.pid} was not added to frozen set: {frozen}"
+        print(f"    {GREEN}✓ Synthetic 92% spike correctly triggered accelerated 100ms loop & SIGSTOP on PID {proc.pid}{RESET}")
+
+        # Inject synthetic 65% recovery
+        print("  • Testing synthetic memory recovery injection (65.0% pressure)...")
+        throttled, frozen, interval = apex_warden.evaluate_memory_pressure_step(
+            targets=["apex_chaos_worker"],
+            is_throttled=True,
+            frozen_pids=frozen,
+            pressure=65.0,
+        )
+        assert throttled is False, "Warden failed to clear throttled state on 65% pressure"
+        assert interval == 0.5, f"Expected 500ms transitional interval, got: {interval}s"
+        assert len(frozen) == 0, f"Frozen set was not cleared on recovery: {frozen}"
+        print(f"    {GREEN}✓ Synthetic 65% recovery correctly resumed processes & cleared throttle state.{RESET}")
     finally:
-        proc.kill()
-        proc.wait()
+        try:
+            os.kill(proc.pid, signal.SIGKILL)
+            proc.wait()
+        except Exception:
+            pass
 
 
 def test_shield_2_enclave_sandbox():

@@ -73,16 +73,20 @@ def get_active_ports() -> Dict[str, int]:
     return {}
 
 
-def start_service(name: str, cmd: list, cwd: Path) -> subprocess.Popen:
+def start_service(name: str, cmd: list, cwd: Path) -> tuple[subprocess.Popen, int]:
     log_out = open(LOGS_DIR / f"{name}.log", "a")
     proc = subprocess.Popen(
         cmd,
         cwd=str(cwd),
         stdout=log_out,
         stderr=subprocess.STDOUT,
-        start_new_session=True,
+        preexec_fn=os.setsid if hasattr(os, "setsid") else None,
     )
-    return proc
+    try:
+        pgrp = os.getpgid(proc.pid)
+    except OSError:
+        pgrp = proc.pid
+    return proc, pgrp
 
 
 def cmd_start(args):
@@ -108,34 +112,43 @@ def cmd_start(args):
         cmd = [str(gateway_bin)]
     else:
         cmd = ["cargo", "run", "--release", "--quiet"]
+    pids = {}
+
+    # 1. Apex-Gateway (Rust)
+    gateway_dir = APEX_ROOT / "apex-gateway"
+    gateway_bin = gateway_dir / "target" / "release" / "apex-gateway"
+    if gateway_bin.exists():
+        cmd = [str(gateway_bin)]
+    else:
+        cmd = ["cargo", "run", "--release", "--quiet"]
     print(f"  [1/4] Spawning {BOLD}Apex-Gateway{RESET} (L7 Inference Proxy)...", end="", flush=True)
-    p_gw = start_service("apex-gateway", cmd, gateway_dir)
-    pids["gateway"] = p_gw.pid
-    print(f" {GREEN}[PID {p_gw.pid}]{RESET}")
+    p_gw, pgrp_gw = start_service("apex-gateway", cmd, gateway_dir)
+    pids["gateway"] = {"pid": p_gw.pid, "pgrp": pgrp_gw}
+    print(f" {GREEN}[PID {p_gw.pid} | PGRP {pgrp_gw}]{RESET}")
 
     # 2. Apex-Core (Python)
     core_dir = APEX_ROOT / "apex-core"
     cmd_core = [sys.executable, "-m", "core.engine"]
     print(f"  [2/4] Spawning {BOLD}Apex-Core{RESET} (APFS CoW DAG Engine)...", end="", flush=True)
-    p_core = start_service("apex-core", cmd_core, core_dir)
-    pids["core"] = p_core.pid
-    print(f" {GREEN}[PID {p_core.pid}]{RESET}")
+    p_core, pgrp_core = start_service("apex-core", cmd_core, core_dir)
+    pids["core"] = {"pid": p_core.pid, "pgrp": pgrp_core}
+    print(f" {GREEN}[PID {p_core.pid} | PGRP {pgrp_core}]{RESET}")
 
     # 3. Apex-Warden (Python)
     warden_dir = APEX_ROOT / "apex-warden"
     cmd_warden = [sys.executable, "apex_warden.py"]
     print(f"  [3/4] Spawning {BOLD}Apex-Warden{RESET} (Adaptive Memory Supervisor)...", end="", flush=True)
-    p_warden = start_service("apex-warden", cmd_warden, warden_dir)
-    pids["warden"] = p_warden.pid
-    print(f" {GREEN}[PID {p_warden.pid}]{RESET}")
+    p_warden, pgrp_warden = start_service("apex-warden", cmd_warden, warden_dir)
+    pids["warden"] = {"pid": p_warden.pid, "pgrp": pgrp_warden}
+    print(f" {GREEN}[PID {p_warden.pid} | PGRP {pgrp_warden}]{RESET}")
 
     # 4. Apex-Console (Vite/React)
     console_dir = APEX_ROOT / "apex-console"
     cmd_console = ["npm", "run", "dev", "--", "--host", "127.0.0.1", "--port", "5173"]
     print(f"  [4/4] Spawning {BOLD}Apex-Console{RESET} (Tauri/Vite UI)...", end="", flush=True)
-    p_console = start_service("apex-console", cmd_console, console_dir)
-    pids["console"] = p_console.pid
-    print(f" {GREEN}[PID {p_console.pid}]{RESET}")
+    p_console, pgrp_console = start_service("apex-console", cmd_console, console_dir)
+    pids["console"] = {"pid": p_console.pid, "pgrp": pgrp_console}
+    print(f" {GREEN}[PID {p_console.pid} | PGRP {pgrp_console}]{RESET}")
 
     save_pids(pids)
 
@@ -158,37 +171,60 @@ def cmd_start(args):
     print(f"  • {BOLD}Apex-Warden:{RESET}    Active (Thresholds: 85% SIGSTOP / 70% SIGCONT)")
     print(f"  • {BOLD}Apex-Console:{RESET}   http://localhost:5173\n")
 
-    if not args.no_browser:
+    if args and not args.no_browser:
         try:
             webbrowser.open("http://localhost:5173")
         except Exception:
             pass
 
 
-def cmd_stop(args):
+def cmd_stop(args=None):
     active_pids = get_active_pids()
     if not active_pids:
         print(f"{YELLOW}No running Apex Stack daemons detected in {PIDS_FILE}.{RESET}")
         return
 
-    print(f"\n{BOLD}{RED}=== TERMINATING APEX STACK DAEMONS ==={RESET}")
-    for name, pid in active_pids.items():
+    print(f"\n{BOLD}{RED}=== TERMINATING APEX STACK DAEMONS (PGRP TEARDOWN) ==={RESET}")
+    for name, info in active_pids.items():
+        pid = info["pid"] if isinstance(info, dict) else info
+        pgrp = info.get("pgrp") if isinstance(info, dict) else pid
+
         if is_pid_alive(pid):
-            print(f"  Terminating {BOLD}{name}{RESET} (PID {pid})...", end="", flush=True)
+            print(f"  Killing process group {BOLD}{name}{RESET} (PID {pid} | PGRP {pgrp})...", end="", flush=True)
+            # 1. Kill process group with SIGTERM
+            if pgrp and hasattr(os, "killpg"):
+                try:
+                    os.killpg(pgrp, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
+                    pass
+
             try:
                 os.kill(pid, signal.SIGTERM)
-                time.sleep(0.1)
-                if is_pid_alive(pid):
+            except (ProcessLookupError, PermissionError):
+                pass
+
+            time.sleep(0.2)
+
+            # 2. Force SIGKILL on process group if any child is alive
+            if pgrp and hasattr(os, "killpg"):
+                try:
+                    os.killpg(pgrp, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+
+            if is_pid_alive(pid):
+                try:
                     os.kill(pid, signal.SIGKILL)
-                print(f" {GREEN}STOPPED{RESET}")
-            except Exception as e:
-                print(f" {YELLOW}[{e}]{RESET}")
+                except (ProcessLookupError, PermissionError):
+                    pass
+
+            print(f" {GREEN}TERMINATED{RESET}")
         else:
             print(f"  Service {name} (PID {pid}) was not running.")
 
     if PIDS_FILE.exists():
         PIDS_FILE.unlink()
-    print(f"{BOLD}{GREEN}All Apex Stack services cleanly terminated. Zero zombie PIDs remaining.{RESET}\n")
+    print(f"{BOLD}{GREEN}All Apex Stack process groups cleanly wiped. Zero zombie PIDs remaining.{RESET}\n")
 
 
 def cmd_status(args):
@@ -196,8 +232,8 @@ def cmd_status(args):
     ports = get_active_ports()
 
     print(f"\n{BOLD}{CYAN}=== APEX STACK RUNTIME TELEMETRY ==={RESET}\n")
-    print(f"{'SERVICE':<16} {'STATUS':<12} {'PID':<8} {'PORT/ENDPOINT'}")
-    print(f"{'-'*16} {'-'*12} {'-'*8} {'-'*30}")
+    print(f"{'SERVICE':<16} {'STATUS':<12} {'PID':<8} {'PGRP':<8} {'PORT/ENDPOINT'}")
+    print(f"{'-'*16} {'-'*12} {'-'*8} {'-'*8} {'-'*30}")
 
     services = [
         ("Apex-Gateway", "gateway", ports.get("gateway", 8080), f"http://127.0.0.1:{ports.get('gateway', 8080)}"),
@@ -207,11 +243,17 @@ def cmd_status(args):
     ]
 
     for display_name, key, port, endpoint in services:
-        pid = active_pids.get(key)
+        info = active_pids.get(key)
+        pid = info["pid"] if isinstance(info, dict) else info
+        pgrp = info.get("pgrp") if isinstance(info, dict) else pid
+
         alive = is_pid_alive(pid) if pid else False
         status_str = f"{GREEN}ONLINE{RESET}" if alive else f"{RED}STOPPED{RESET}"
         pid_str = str(pid) if pid else "---"
-        print(f"{display_name:<16} {status_str:<21} {pid_str:<8} {endpoint}")
+        pgrp_str = str(pgrp) if pgrp else "---"
+        print(f"{display_name:<16} {status_str:<21} {pid_str:<8} {pgrp_str:<8} {endpoint}")
+
+    print("")
 
     print("")
 
@@ -243,6 +285,17 @@ def main():
 
     # Test
     subparsers.add_parser("test", help="Run the automated chaos-monkey adversarial test harness")
+
+    def signal_teardown(sig, frame):
+        print(f"\n{YELLOW}Signal {sig} received. Initiating emergency process group teardown...{RESET}")
+        cmd_stop()
+        sys.exit(0)
+
+    try:
+        signal.signal(signal.SIGINT, signal_teardown)
+        signal.signal(signal.SIGTERM, signal_teardown)
+    except Exception:
+        pass
 
     args = parser.parse_args()
 
