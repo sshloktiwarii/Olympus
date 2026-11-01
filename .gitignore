@@ -16,3 +16,7 @@ __pycache__/
 # Logs and ephemeral runtime state
 *.log
 .apex/
+
+graphify-out/
+brag-output/
+

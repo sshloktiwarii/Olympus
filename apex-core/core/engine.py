@@ -181,34 +181,25 @@ class ApexDAGRunner:
                     if not enclave_bin.exists():
                         enclave_bin = Path(__file__).resolve().parent.parent.parent / "apex-enclave" / "target" / "release" / "apex-enclave"
 
-                    if enclave_bin.exists():
-                        cmd = [str(enclave_bin)] + task.command.split()
-                        proc = await asyncio.create_subprocess_exec(
-                            *cmd,
-                            cwd=str(self.workspace.current_workspace),
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.PIPE,
-                        )
-                        raw_stdout, raw_stderr = await proc.communicate()
-                        try:
-                            res = json.loads(raw_stdout.decode("utf-8", errors="replace"))
-                            task.output = res.get("stdout", "")
-                            task.error = res.get("stderr", "")
-                            exit_code = res.get("exit_code", proc.returncode)
-                        except Exception:
-                            task.output = raw_stdout.decode("utf-8", errors="replace")
-                            task.error = raw_stderr.decode("utf-8", errors="replace")
-                            exit_code = proc.returncode
-                    else:
-                        proc = await asyncio.create_subprocess_shell(
-                            task.command,
-                            cwd=str(self.workspace.current_workspace),
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.PIPE,
-                        )
-                        stdout, stderr = await proc.communicate()
-                        task.output = stdout.decode("utf-8", errors="replace")
-                        task.error = stderr.decode("utf-8", errors="replace")
+                    if not enclave_bin.exists():
+                        raise RuntimeError(f"Apex-Enclave binary not found. Execution aborted for security.")
+
+                    cmd = [str(enclave_bin)] + task.command.split()
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        cwd=str(self.workspace.current_workspace),
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    raw_stdout, raw_stderr = await proc.communicate()
+                    try:
+                        res = json.loads(raw_stdout.decode("utf-8", errors="replace"))
+                        task.output = res.get("stdout", "")
+                        task.error = res.get("stderr", "")
+                        exit_code = res.get("exit_code", proc.returncode)
+                    except Exception:
+                        task.output = raw_stdout.decode("utf-8", errors="replace")
+                        task.error = raw_stderr.decode("utf-8", errors="replace")
                         exit_code = proc.returncode
 
                     duration = (time.perf_counter() - start_time) * 1000
@@ -242,11 +233,16 @@ class ApexDAGRunner:
 
 if HAS_FASTAPI:
     app = FastAPI(title="Apex-Core Orchestration Engine")
+    # Restrict CORS to explicit loopback origins to prevent cross-site origin abuse
+    allowed_origins = os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000",
+    ).split(",")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=allowed_origins,
         allow_credentials=True,
-        allow_methods=["*"],
+        allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
     )
 

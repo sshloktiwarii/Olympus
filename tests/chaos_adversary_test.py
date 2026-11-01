@@ -60,40 +60,47 @@ def test_shield_1_warden_memory():
 
     # 3. Deterministic Synthetic Telemetry Injection (Eliminates OOM Race Conditions)
     print("  • Testing synthetic memory spike injection (92.0% pressure)...")
-    proc = subprocess.Popen([sys.executable, "-c", "# apex_chaos_worker\nimport time\ntime.sleep(15)"])
-    time.sleep(0.1)
-
-    try:
-        # Inject synthetic 92% critical memory spike
-        throttled, frozen, interval = apex_warden.evaluate_memory_pressure_step(
-            targets=["apex_chaos_worker"],
-            is_throttled=False,
-            frozen_pids=set(),
-            pressure=92.0,
+    with tempfile.TemporaryDirectory() as td:
+        worker_bin = Path(td) / "apex_chaos_worker"
+        subprocess.run(
+            ["cc", "-x", "c", "-", "-o", str(worker_bin)],
+            input=b"#include <unistd.h>\nint main() { sleep(30); return 0; }\n",
+            check=True,
         )
-        assert throttled is True, "Warden failed to enter throttled state on 92% pressure"
-        assert interval == 0.1, f"Expected 100ms accelerated polling interval, got: {interval}s"
-        assert proc.pid in frozen, f"Target PID {proc.pid} was not added to frozen set: {frozen}"
-        print(f"    {GREEN}✓ Synthetic 92% spike correctly triggered accelerated 100ms loop & SIGSTOP on PID {proc.pid}{RESET}")
+        proc = subprocess.Popen([str(worker_bin)], start_new_session=True)
+        time.sleep(0.1)
 
-        # Inject synthetic 65% recovery
-        print("  • Testing synthetic memory recovery injection (65.0% pressure)...")
-        throttled, frozen, interval = apex_warden.evaluate_memory_pressure_step(
-            targets=["apex_chaos_worker"],
-            is_throttled=True,
-            frozen_pids=frozen,
-            pressure=65.0,
-        )
-        assert throttled is False, "Warden failed to clear throttled state on 65% pressure"
-        assert interval == 0.5, f"Expected 500ms transitional interval, got: {interval}s"
-        assert len(frozen) == 0, f"Frozen set was not cleared on recovery: {frozen}"
-        print(f"    {GREEN}✓ Synthetic 65% recovery correctly resumed processes & cleared throttle state.{RESET}")
-    finally:
         try:
-            os.kill(proc.pid, signal.SIGKILL)
-            proc.wait()
-        except Exception:
-            pass
+            # Inject synthetic 92% critical memory spike
+            throttled, frozen, interval = apex_warden.evaluate_memory_pressure_step(
+                targets=["apex_chaos_worker"],
+                is_throttled=False,
+                frozen_pids=set(),
+                pressure=92.0,
+            )
+            assert throttled is True, "Warden failed to enter throttled state on 92% pressure"
+            assert interval == 0.1, f"Expected 100ms accelerated polling interval, got: {interval}s"
+            assert proc.pid in frozen, f"Target PID {proc.pid} was not added to frozen set: {frozen}"
+            print(f"    {GREEN}✓ Synthetic 92% spike correctly triggered accelerated 100ms loop & SIGSTOP on PID {proc.pid}{RESET}")
+
+            # Inject synthetic 65% recovery
+            print("  • Testing synthetic memory recovery injection (65.0% pressure)...")
+            throttled, frozen, interval = apex_warden.evaluate_memory_pressure_step(
+                targets=["apex_chaos_worker"],
+                is_throttled=True,
+                frozen_pids=frozen,
+                pressure=65.0,
+            )
+            assert throttled is False, "Warden failed to clear throttled state on 65% pressure"
+            assert interval == 0.5, f"Expected 500ms transitional interval, got: {interval}s"
+            assert len(frozen) == 0, f"Frozen set was not cleared on recovery: {frozen}"
+            print(f"    {GREEN}✓ Synthetic 65% recovery correctly resumed processes & cleared throttle state.{RESET}")
+        finally:
+            try:
+                os.kill(proc.pid, signal.SIGKILL)
+                proc.wait()
+            except Exception:
+                pass
 
 
 def test_shield_2_enclave_sandbox():

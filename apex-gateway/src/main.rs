@@ -19,22 +19,22 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Instant;
-use tokio::sync::mpsc::{self, UnboundedSender};
+use tokio::sync::mpsc::{self, Receiver, Sender};
 use tracing::{error, info};
 
 pin_project! {
     /// Zero-Blocking custom Stream wrapper around hyper Body.
     /// Synchronously yields SSE chunks directly to the downstream HTTP client
-    /// while cloning bytes into an unbounded channel for async microsecond TTFT calculation.
+    /// while cloning bytes into a bounded channel for async microsecond TTFT calculation.
     pub struct ZeroBlockingTelemetryStream<S> {
         #[pin]
         inner: S,
-        sender: UnboundedSender<(Bytes, Instant)>,
+        sender: Sender<(Bytes, Instant)>,
     }
 }
 
 impl<S> ZeroBlockingTelemetryStream<S> {
-    pub fn new(inner: S, sender: UnboundedSender<(Bytes, Instant)>) -> Self {
+    pub fn new(inner: S, sender: Sender<(Bytes, Instant)>) -> Self {
         Self { inner, sender }
     }
 }
@@ -50,8 +50,8 @@ where
         match this.inner.poll_next(cx) {
             Poll::Ready(Some(Ok(bytes))) => {
                 let now = Instant::now();
-                // Send synchronously to unbounded channel without blocking poll
-                let _ = this.sender.send((bytes.clone(), now));
+                // Send synchronously to bounded channel without blocking poll
+                let _ = this.sender.try_send((bytes.clone(), now));
                 Poll::Ready(Some(Ok(bytes)))
             }
             Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
@@ -65,7 +65,7 @@ where
 struct AppState {
     client: Client<HttpConnector, Full<Bytes>>,
     upstream_url: String,
-    telemetry_tx: UnboundedSender<(String, Instant, mpsc::UnboundedReceiver<(Bytes, Instant)>)>,
+    telemetry_tx: Sender<(String, Instant, Receiver<(Bytes, Instant)>)>,
 }
 
 #[tokio::main]
@@ -73,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
     let (telemetry_tx, mut telemetry_rx) =
-        mpsc::unbounded_channel::<(String, Instant, mpsc::UnboundedReceiver<(Bytes, Instant)>)>();
+        mpsc::channel::<(String, Instant, Receiver<(Bytes, Instant)>)>(1024);
 
     // Background Tokio worker that reads chunks to calculate Time-To-First-Token (TTFT)
     tokio::spawn(async move {
@@ -223,10 +223,11 @@ async fn handle_chat_completions(
     let status = upstream_res.status();
 
     if is_streaming {
-        let (chunk_tx, chunk_rx) = mpsc::unbounded_channel();
+        let (chunk_tx, chunk_rx) = mpsc::channel(1024);
         let _ = state
             .telemetry_tx
-            .send((req_id.clone(), req_start, chunk_rx));
+            .send((req_id.clone(), req_start, chunk_rx))
+            .await;
 
         // Convert incoming hyper frame stream into Stream<Item = Result<Bytes, hyper::Error>>
         let frame_stream = upstream_res.into_body().into_data_stream();

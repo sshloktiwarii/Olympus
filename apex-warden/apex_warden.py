@@ -83,9 +83,11 @@ def get_memory_pressure_pct() -> float:
 
 
 def find_target_pids(target_names: List[str]) -> Set[int]:
-    """Finds PIDs of processes matching any of the target names.
+    """Finds PIDs of processes matching any of the target names using exact binary name matching.
     Explicitly protects Warden's own PID, its parent PID, and its entire process group
     from ever being targeted by SIGSTOP signals."""
+    if not target_names:
+        return set()
     pids: Set[int] = set()
     my_pid = os.getpid()
     parent_pid = os.getppid()
@@ -95,7 +97,8 @@ def find_target_pids(target_names: List[str]) -> Set[int]:
         my_pgid = -1
 
     try:
-        res = subprocess.run(["pgrep", "-f", "|".join(target_names)], capture_output=True, text=True)
+        # Enforce exact binary name matching with pgrep -x instead of broad substring matching
+        res = subprocess.run(["pgrep", "-x", "|".join(target_names)], capture_output=True, text=True)
         for line in res.stdout.strip().splitlines():
             if line.isdigit():
                 pid = int(line)
@@ -176,19 +179,43 @@ def run_warden(targets: List[str], base_interval_sec: float = 1.0) -> None:
     is_throttled = False
     frozen_pids: Set[int] = set()
 
+    def resume_all_frozen() -> None:
+        if frozen_pids:
+            log_event(f"Resuming {len(frozen_pids)} frozen processes with SIGCONT before exit...")
+            for pid in list(frozen_pids):
+                try:
+                    os.kill(pid, signal.SIGCONT)
+                    log_event(f"  -> SIGCONT sent to PID {pid}")
+                except ProcessLookupError:
+                    pass
+                except Exception as e:
+                    log_event(f"  -> Error sending SIGCONT to PID {pid}: {e}")
+            frozen_pids.clear()
+
+    def handle_shutdown_signal(signum: int, frame) -> None:
+        sig_name = signal.Signals(signum).name if hasattr(signal, "Signals") else str(signum)
+        log_event(f"Received shutdown signal {sig_name} ({signum}). Resuming all frozen processes...")
+        resume_all_frozen()
+        sys.exit(0)
+
+    # Register handlers for SIGTERM, SIGHUP, SIGQUIT, and SIGINT
+    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT, signal.SIGINT):
+        try:
+            signal.signal(sig, handle_shutdown_signal)
+        except (ValueError, AttributeError):
+            pass
+
     try:
         while True:
             is_throttled, frozen_pids, sleep_interval = evaluate_memory_pressure_step(
                 targets, is_throttled, frozen_pids
             )
             time.sleep(sleep_interval)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, SystemExit):
         log_event("Shutting down Warden. Resuming all frozen processes...")
-        for pid in frozen_pids:
-            try:
-                os.kill(pid, signal.SIGCONT)
-            except Exception:
-                pass
+        resume_all_frozen()
+    finally:
+        resume_all_frozen()
 
 
 if __name__ == "__main__":
