@@ -171,21 +171,50 @@ class ApexDAGRunner:
                 snapshot = self.workspace.create_snapshot(task.id)
                 start_time = time.perf_counter()
 
-                # Step 2: Execute task subprocess inside workspace
+                # Step 2: Execute task subprocess inside workspace via secure apex-enclave
                 try:
-                    proc = await asyncio.create_subprocess_shell(
-                        task.command,
-                        cwd=str(self.workspace.current_workspace),
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                    )
-                    stdout, stderr = await proc.communicate()
+                    import json
+                    from pathlib import Path
+
+                    # Locate apex-enclave binary (debug or release)
+                    enclave_bin = Path(__file__).resolve().parent.parent.parent / "apex-enclave" / "target" / "debug" / "apex-enclave"
+                    if not enclave_bin.exists():
+                        enclave_bin = Path(__file__).resolve().parent.parent.parent / "apex-enclave" / "target" / "release" / "apex-enclave"
+
+                    if enclave_bin.exists():
+                        cmd = [str(enclave_bin)] + task.command.split()
+                        proc = await asyncio.create_subprocess_exec(
+                            *cmd,
+                            cwd=str(self.workspace.current_workspace),
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                        )
+                        raw_stdout, raw_stderr = await proc.communicate()
+                        try:
+                            res = json.loads(raw_stdout.decode("utf-8", errors="replace"))
+                            task.output = res.get("stdout", "")
+                            task.error = res.get("stderr", "")
+                            exit_code = res.get("exit_code", proc.returncode)
+                        except Exception:
+                            task.output = raw_stdout.decode("utf-8", errors="replace")
+                            task.error = raw_stderr.decode("utf-8", errors="replace")
+                            exit_code = proc.returncode
+                    else:
+                        proc = await asyncio.create_subprocess_shell(
+                            task.command,
+                            cwd=str(self.workspace.current_workspace),
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                        )
+                        stdout, stderr = await proc.communicate()
+                        task.output = stdout.decode("utf-8", errors="replace")
+                        task.error = stderr.decode("utf-8", errors="replace")
+                        exit_code = proc.returncode
+
                     duration = (time.perf_counter() - start_time) * 1000
                     task.duration_ms = duration
-                    task.output = stdout.decode("utf-8", errors="replace")
-                    task.error = stderr.decode("utf-8", errors="replace")
 
-                    if proc.returncode == 0:
+                    if exit_code == 0:
                         task.status = NodeStatus.SUCCESS
                         completed.add(task.id)
                     else:

@@ -32,24 +32,23 @@ pub trait SandboxDriver {
 pub struct DarwinSeatbeltDriver;
 
 impl DarwinSeatbeltDriver {
-    fn generate_profile(workspace: &Path) -> String {
-        let ws_str = workspace.to_string_lossy();
-        format!(
-            r#"(version 1)
+    fn generate_profile() -> &'static str {
+        r#"(version 1)
 (deny default)
 (deny network*)
 (allow process-exec)
 (allow process-fork)
 (allow sysctl-read)
-(allow file-read* (subpath "/"))
-(allow file-read-metadata)
-(allow file-read* file-write* (subpath "{ws_str}"))
-(allow file-read* file-write* (subpath "/dev/null"))
-(allow file-read* file-write* (subpath "/dev/zero"))
-(allow file-read* file-write* (subpath "/dev/urandom"))
-(allow file-read* file-write* (subpath "/dev/dtracehelper"))
+(allow file-read*)
+(deny file-read* (subpath (param "HOME_DIR")))
+(allow file-read* file-write* (subpath (param "WORKSPACE_DIR")))
+(allow file* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/urandom") (literal "/dev/dtracehelper"))
+(allow file* (subpath "/private/tmp") (subpath "/tmp") (subpath "/var/folders"))
+(deny file-read* (subpath (param "BLOCKED_SSH")))
+(deny file-read* (subpath (param "BLOCKED_AWS")))
+(deny file-read* (subpath (param "BLOCKED_GNUPG")))
+(deny file-read* (subpath (param "BLOCKED_CONFIG")))
 "#
-        )
     }
 }
 
@@ -60,9 +59,20 @@ impl SandboxDriver for DarwinSeatbeltDriver {
         args: &[String],
         workspace: &Path,
     ) -> Result<ExecutionResult, EnclaveError> {
-        let profile = Self::generate_profile(workspace);
+        let profile = Self::generate_profile();
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        let ssh_dir = format!("{}/.ssh", home);
+        let aws_dir = format!("{}/.aws", home);
+        let gnupg_dir = format!("{}/.gnupg", home);
+        let config_dir = format!("{}/.config", home);
 
         let mut cmd = Command::new("/usr/bin/sandbox-exec");
+        cmd.arg("-D").arg(format!("WORKSPACE_DIR={}", workspace.display()));
+        cmd.arg("-D").arg(format!("HOME_DIR={}", home));
+        cmd.arg("-D").arg(format!("BLOCKED_SSH={}", ssh_dir));
+        cmd.arg("-D").arg(format!("BLOCKED_AWS={}", aws_dir));
+        cmd.arg("-D").arg(format!("BLOCKED_GNUPG={}", gnupg_dir));
+        cmd.arg("-D").arg(format!("BLOCKED_CONFIG={}", config_dir));
         cmd.arg("-p").arg(profile);
         cmd.arg(command);
         cmd.args(args);

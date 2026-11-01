@@ -83,16 +83,30 @@ def get_memory_pressure_pct() -> float:
 
 
 def find_target_pids(target_names: List[str]) -> Set[int]:
-    """Finds PIDs of processes matching any of the target names."""
+    """Finds PIDs of processes matching any of the target names.
+    Explicitly protects Warden's own PID, its parent PID, and its entire process group
+    from ever being targeted by SIGSTOP signals."""
     pids: Set[int] = set()
     my_pid = os.getpid()
+    parent_pid = os.getppid()
+    try:
+        my_pgid = os.getpgid(my_pid)
+    except Exception:
+        my_pgid = -1
+
     try:
         res = subprocess.run(["pgrep", "-f", "|".join(target_names)], capture_output=True, text=True)
         for line in res.stdout.strip().splitlines():
             if line.isdigit():
                 pid = int(line)
-                if pid != my_pid:
-                    pids.add(pid)
+                if pid == my_pid or pid == parent_pid:
+                    continue
+                try:
+                    if my_pgid != -1 and os.getpgid(pid) == my_pgid:
+                        continue
+                except Exception:
+                    pass
+                pids.add(pid)
     except Exception:
         pass
     return pids
@@ -178,5 +192,6 @@ def run_warden(targets: List[str], base_interval_sec: float = 1.0) -> None:
 
 
 if __name__ == "__main__":
-    targets = sys.argv[1:] if len(sys.argv) > 1 else ["ollama", "vllm", "python"]
+    # Never freeze generic "python" by default, as that inadvertently stops apex-core itself!
+    targets = sys.argv[1:] if len(sys.argv) > 1 else ["ollama", "vllm"]
     run_warden(targets)
